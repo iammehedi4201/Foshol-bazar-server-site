@@ -13,3 +13,11 @@
     1-npm install 
     2-nodemon index.js 
 ---------------------------------
+>>>>>Jwt SetUp
+      $ npm install jsonwebtoken
+      const jwt = require('jsonwebtoken')
+>>>>>For creating jwt scraet key :
+      frist write node in the terminal then enter
+      require('crypto').randomBytes(64).toString('hex')
+      take key without the doubleClone or singleClone 
+      then env file write ACCESS_TOKEN_SCRETE_KEY = enter you key that copy form terminal
