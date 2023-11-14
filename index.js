@@ -674,7 +674,7 @@ async function run() {
         });
         if (updatedResult.modifiedCount > 0) {
           res.redirect(
-            `http://localhost:5173/dashboard/payment/success/${req.params.tranId}` //in this use firbase link
+            `https://foshol-bazar.web.app/dashboard/payment/success/${req.params.tranId}` //in this use firbase link
           );
         }
       });
@@ -685,7 +685,7 @@ async function run() {
         const deleteResult = await orderCollection.deleteOne(query);
         if (deleteResult.deletedCount > 0) {
           res.redirect(
-            `http://localhost:5173/dashboard/payment/fail/${req.params.tranId}` //in this use firbase link
+            `https://foshol-bazar.web.app/dashboard/payment/fail/${req.params.tranId}` //in this use firbase link
           );
         }
       });
