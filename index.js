@@ -1,5 +1,8 @@
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const SSLCommerzPayment = require("sslcommerz-lts");
+const { Vonage } = require("@vonage/server-sdk");
+const nodemailer = require("nodemailer");
+const { v4: uuidv4 } = require("uuid");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const express = require("express");
@@ -22,11 +25,102 @@ const client = new MongoClient(uri, {
   },
 });
 
+//Vonage Initialize
+const vonage = new Vonage({
+  apiKey: `${process.env.VONAGE_API_KEY}`,
+  apiSecret: `${process.env.VONAGE_API_SECRET}`,
+});
+
+/*------------Send Email By NodeMailer   ------------- */
+const sendMail = async (email, orderinfo) => {
+  console.log("The mail is :", email);
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+    auth: {
+      // TODO: replace `user` and `pass` values from <https://forwardemail.net>
+      user: process.env.SMTP_USERNAME,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+  const reciverMail = await email;
+  const {
+    date,
+    transactionId,
+    customerName,
+    shippingAddress,
+    orderItems,
+    totalPrice,
+  } = await orderinfo;
+  const info = await transporter.sendMail({
+    from: process.env.SMTP_USERNAME, // sender address
+    to: reciverMail, // list of receivers
+    subject: "Payment successful: Have a nice day!", // Subject line
+    text: "Hello world?", // plain text body
+    html: `<div class="bg-white rounded-lg shadow-lg px-8 py-10 max-w-xl mx-auto">
+    <div class="flex items-center justify-between mb-8">
+        <div class="flex items-center">
+            <img class="h-8 w-8 mr-2" src="https://tailwindflex.com/public/images/logos/favicon-32x32.png"
+                alt="Logo" />
+            <div class="text-gray-700 font-semibold text-lg">Foshol Bazar</div>
+        </div>
+        <div class="text-gray-700">
+            <div class="font-bold text-xl mb-2">INVOICE</div>
+            <div class="text-sm">Date: ${date}</div>
+            <div class="text-sm">Invoice #: ${transactionId}</div>
+        </div>
+    </div>
+    <div class="border-b-2 border-gray-300 pb-8 mb-8">
+        <h2 class="text-2xl font-bold mb-4">Bill To:</h2>
+        <div class="text-gray-700 mb-2">${customerName}</div>
+        <div class="text-gray-700 mb-2">${shippingAddress?.address},${
+      shippingAddress?.city
+    }</div>
+        <div class="text-gray-700">${reciverMail}</div>
+    </div>
+    <table class="w-full text-left mb-8">
+        <thead>
+            <tr>
+                <th class="text-gray-700 font-bold uppercase py-2">Product Name</th>
+                <th class="text-gray-700 font-bold uppercase py-2">Quantity</th>
+                <th class="text-gray-700 font-bold uppercase py-2">Price</th>
+            </tr>
+        </thead>
+        <tbody>
+        ${orderItems
+          .map(
+            (product) =>
+              `<tr>
+            <td class="py-4 text-gray-700">${product.productName}</td>
+            <td class="py-4 text-gray-700">${product.productQuantity}</td>
+            <td class="py-4 text-gray-700">
+              ${product.productPrice * product.productQuantity}
+            </td>
+          </tr>`
+          )
+          .join("")}   
+        </tbody>
+    </table>
+    <div class="flex justify-end mb-8">
+        <div class="text-gray-700 mr-2">Subtotal:</div>
+        <div class="text-gray-700">${totalPrice}</div>
+    </div>
+    <div class="flex justify-end mb-8">
+        <div class="text-gray-700 mr-2">Total:</div>
+        <div class="text-gray-700 font-bold text-xl">${totalPrice}</div>
+    </div>
+</div>`, // html body
+  });
+  console.log("Message sent: %s", info.messageId);
+};
+
 //--------------for sslCommerz-------------
 const store_id = process.env.STORE_ID;
 const store_passwd = process.env.STORE_PASS;
 const is_live = false; //true for live, false for sandbox
 
+//jwt middleware
 const verifyjWT = (req, res, next) => {
   const authorization = req.headers.authorization;
   if (!authorization) {
@@ -62,6 +156,7 @@ async function run() {
     const orderCollection = client.db("Foshol-bazar").collection("Orders");
     const userCollection = client.db("Foshol-bazar").collection("Users");
     const reviewCollection = client.db("Foshol-bazar").collection("Reviews");
+    const couponsCollection = client.db("Foshol-bazar").collection("Coupons");
 
     /*------------jWT Api ------------- */
 
@@ -90,7 +185,6 @@ async function run() {
     };
 
     /*------------admin home  Api ------------- */
-
     //Admin stats
     app.get("/admin-stats", verifyjWT, verifyAdmin, async (req, res) => {
       const users = await userCollection.estimatedDocumentCount();
@@ -222,7 +316,9 @@ async function run() {
         {
           $group: {
             _id: "$customerEmail",
-            customarName: { $addToSet: "$customerName" },
+            // customarName: { $addToSet: "$customerName" },
+            phoneNumber: { $first: "$phoneNumber" },
+            customarName: { $first: "$customerName" },
             buyProductCount: { $sum: "$orderItems.productQuantity" },
             totalSpent: {
               $sum: {
@@ -241,6 +337,7 @@ async function run() {
           $project: {
             customarEmail: "$_id",
             customarName: 1,
+            phoneNumber: 1,
             buyProductCount: 1,
             totalSpent: 1,
             _id: 0,
@@ -249,6 +346,72 @@ async function run() {
       ];
       const result = await orderCollection.aggregate(pipline).toArray();
       res.send(result);
+    });
+
+    /*------------coupons  Api ------------- */
+
+    //Read Coupon
+    app.get("/coupons", verifyjWT, verifyAdmin, async (req, res) => {
+      const coupon = req.query.coupon;
+      if (coupon) {
+        const query = { coupon: coupon };
+        const couponDetails = await couponsCollection.findOne(query);
+        if (couponDetails) {
+          const { expiryDate } = couponDetails;
+          const today = new Date().toLocaleDateString("en-US", {
+            timeZone: "UTC",
+          });
+          const couponExpiryDate = new Date(expiryDate);
+          const formattedExpiryDate = couponExpiryDate.toLocaleDateString(
+            "en-US",
+            { timeZone: "UTC" }
+          );
+          if (today > formattedExpiryDate) {
+            res.send("Expiry date over");
+          } else {
+            res.send("Expiry date not over");
+          }
+        } else {
+          res.send("coupon is not valid");
+        }
+      } else {
+        const coupons = await couponsCollection.find().toArray();
+        res.send(coupons);
+      }
+    });
+
+    //Insert Coupon
+    app.post("/coupons", verifyjWT, verifyAdmin, async (req, res) => {
+      const coupons = req.body;
+      const result = await couponsCollection.insertOne(coupons);
+      res.send(result);
+    });
+
+    //Send coupon To customer
+    app.post("/sendCoupons", async (req, res) => {
+      const customerDetails = req.body;
+      const { phoneNumber, couponCode, couponExpiry } = customerDetails;
+      const from = "Vonage APIs";
+      const to = "8801775777038";
+      const text = `Enjoy 20% off your next purchase with code: ${couponCode}. 
+      Shop now at https://foshol-bazar.web.app/.
+      Hurry, offer expires ${couponExpiry}!
+      Thank you for choosing [Foshol Bazar].
+      Happy shopping!`;
+
+      async function sendSMS() {
+        await vonage.sms
+          .send({ to, from, text })
+          .then((resp) => {
+            console.log("Message sent successfully");
+            console.log(resp);
+          })
+          .catch((err) => {
+            console.log("There was an error sending the messages.");
+            console.error(err);
+          });
+      }
+      await sendSMS();
     });
 
     /*------------Users Api ------------- */
@@ -456,8 +619,8 @@ async function run() {
         total_amount: orderInfo.totalPrice,
         currency: "BDT",
         tran_id: tran_id, // use unique tran_id for each api call
-        success_url: `https://foshol-bazar.onrender.com/payment/success/${tran_id}`, //in this use vercel link
-        fail_url: `https://foshol-bazar.onrender.com/payment/fail/${tran_id}`, //in this use vercel link
+        success_url: `http://localhost:3000/payment/success/${tran_id}`, //in this use vercel link
+        fail_url: `http://localhost:3000/payment/fail/${tran_id}`, //in this use vercel link
         cancel_url: "http://localhost:3030/cancel",
         ipn_url: "http://localhost:3030/ipn",
         shipping_method: orderInfo.deilveryMethod,
@@ -494,6 +657,7 @@ async function run() {
       orderInfo.status = "Pending";
       orderInfo.transactionId = tran_id;
       orderInfo.orderItems = orderInfo.orderItems.map((product) => ({
+        uid: uuidv4(),
         ...product,
         reviewStatus: false,
       }));
@@ -502,21 +666,15 @@ async function run() {
       //New success route
       app.post("/payment/success/:tranId", async (req, res) => {
         const query = { transactionId: req.params.tranId };
-        // const qureyTwo = {
-        //   _id: { $in: orderInfo.cartItemId.map((id) => new ObjectId(id)) },
-        // };
+        sendMail(orderInfo.customerEmail, orderInfo);
         const updatedResult = await orderCollection.updateOne(query, {
           $set: {
             paidStatus: true,
           },
         });
-
-        // console.log("query Two is :-", qureyTwo);
-
-        // const deletedResult = await userCartsCollection.deleteMany(qureyTwo);
         if (updatedResult.modifiedCount > 0) {
           res.redirect(
-            `https://foshol-bazar.web.app/dashboard/payment/success/${req.params.tranId}` //in this use firbase link
+            `http://localhost:5173/dashboard/payment/success/${req.params.tranId}` //in this use firbase link
           );
         }
       });
@@ -527,7 +685,7 @@ async function run() {
         const deleteResult = await orderCollection.deleteOne(query);
         if (deleteResult.deletedCount > 0) {
           res.redirect(
-            `https://foshol-bazar.web.app/dashboard/payment/fail/${req.params.tranId}` //in this use firbase link
+            `http://localhost:5173/dashboard/payment/fail/${req.params.tranId}` //in this use firbase link
           );
         }
       });
@@ -560,11 +718,11 @@ async function run() {
     //------------------Review APi -------------------
     app.post("/reviews", async (req, res) => {
       const reviews = req.body;
-      const { productID } = reviews;
+      const { uid } = reviews;
       // console.log(productID);
       const updateResult = await orderCollection.updateOne(
         {
-          "orderItems.ProductID": productID,  //!got error that   
+          "orderItems.uid": uid, //!got error that
         },
         { $set: { "orderItems.$.reviewStatus": true } }
       );
