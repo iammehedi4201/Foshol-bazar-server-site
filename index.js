@@ -355,6 +355,7 @@ async function run() {
       const coupon = req.query.coupon;
       if (coupon) {
         const query = { coupon: coupon };
+        console.log(query);
         const couponDetails = await couponsCollection.findOne(query);
         if (couponDetails) {
           const { expiryDate } = couponDetails;
@@ -383,8 +384,25 @@ async function run() {
     //Insert Coupon
     app.post("/coupons", verifyjWT, verifyAdmin, async (req, res) => {
       const coupons = req.body;
-      const result = await couponsCollection.insertOne(coupons);
-      res.send(result);
+      const { coupon, expiryDate } = coupons;
+      const couponExist = await couponsCollection.findOne({ coupon: coupon });
+      console.log(couponExist._id);
+      if (couponExist) {
+        const modifiedResult = await couponsCollection.updateOne(
+          {
+            _id: couponExist._id,
+          },
+          {
+            $set: {
+              expiryDate: expiryDate,
+            },
+          }
+        );
+        res.send(modifiedResult);
+      } else {
+        const result = await couponsCollection.insertOne(coupons);
+        res.send(result);
+      }
     });
 
     //Send coupon To customer
